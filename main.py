@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import json
 import re
+import pickle
+import os
 
 headers = {
     'Host': 'www.cninfo.com.cn',
@@ -22,51 +24,113 @@ headers = {
     'Cookie': ''}
 
 form_data = {
-    'pageNum': '1',
+    'pageNum': '',
     'pageSize': '30',
     'column': '',
     'tabName': 'fulltext',
     'plate': '', 
-    'stock': '601628,9900001881',
+    'stock': '',
     'searchkey': '',
     'secid': '',
     'category': '',
     'trade': '',
-    'seDate': '2020-11-13~2021-05-14',
+    'seDate': '',
     'sortName': '',
     'sortType': '', 
     'isHLtitle': 'true'
 }
 
+working_dir = os.getcwd()
 request_url = 'http://www.cninfo.com.cn/new/hisAnnouncement/query'
 max_attempts = 3
- 
-def stock_formatter():
+
+class Query:
+    def __init__(self, query_name, searchkey, code_list,
+                 from_date, to_date=None,
+                 stock_list=None, last_update_time=None, record_num=None, result=None):
+        self.query_name = query_name
+        self.searchkey = searchkey
+        self.from_date =from_date
+        self.to_date = to_date
+        self._stock_list = stock_list
+        self._code_list = code_list
+        self._last_update_time = last_update_time
+        self._record_num = record_num
+        self._result = result
+    
+    @property
+    def status(self):
+        status = f'''
+        Query name: {self.query_name}
+        Search keyword: {self.searchkey}
+        Stock list length: {len(self._stock_list)}
+        Search keyword: {self.searchkey}
+        Time range: {str(self.from_date) + "~" + str(self.to_date)}
+        Most recent update: {self._record_num} records in total on {self._last_update_time}
+        
+        Instructions:
+        - Use ".stock_list" attribute to access the stocks involved in the query.
+        - Use ".result" attribute to access the query result DataFrame.
+        - Use ".update()" method to update the query.
+        - Use ".download()" method to download the PDF notices in the query result.
+
+        '''
+        print(status)
+    
+    def save(self):
+        os.makedirs('.saved_query', exist_ok=True)
+        output = os.path.join(working_dir, '.saved_query', self.query_name+'.pickle')
+        with open(output, 'wb') as f:
+            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
+    
+    def update(self, first_update=False):
+        if self.to_date:
+            print(f'This query has a specific cut-off date {self.to_date}, there will be no updates.')
+
+        else:
+            query_result_df = notice_query(self._code_list, self.searchkey, self.from_date, use_converter=False)
+            new_record_num = query_result_df.shape[0]
+            if first_update:
+                self._stock_list = list(query_result_df['secName'].unique())
+            else:
+                print(f'{new_record_num - self._record_num} new notice(s) since last update on {self._last_update_time}.')
+            self._last_update_time = datetime.now()
+            self._record_num = new_record_num
+            print(f'Your query has been updated.\nThe query result now has {new_record_num} records. You can access them by ".result" attribute.')
+            self._result = query_result_df
+        
+    def download(self):
+        pass
+        
+        
+def converter():
     '''
     Parameters:
         None
         
     Returns:
         a function that accepts a stock code or a stock name and 
-        returns the stock_code orgId pair for cninfo query
+        returns the stock_code orgId pair for cninfo query.
     '''
     with open('szse_stock.json', 'rb') as szse_stock:
-            reference_list = pd.DataFrame(json.load(szse_stock))
+        rf_list = pd.DataFrame(json.load(szse_stock))
     
-    def format_stock(input):
+    def convert(input):
+        possible_stock_code = re.compile(r'\d{6}')
         try:
-            if re.match(r'\d{6}', input):
-                orgId = reference_list.set_index('code').at[input, 'orgId']
+            if possible_stock_code.match(input):
+                orgId = rf_list.set_index('code').at[input, 'orgId']
                 return input + ',' + orgId
             else:
-                code = reference_list.set_index('zwjc').at[input, 'code']
-                orgId = reference_list.set_index('zwjc').at[input, 'orgId']
-                return code + ',' + orgId
+                code = rf_list.set_index('zwjc').at[input, 'code']
+                orgId = rf_list.set_index('zwjc').at[input, 'orgId']
+                return code + ',' + orgId   
         except Exception:
             raise ValueError('Please check your input.\nStock codes and stock names are supported, e.g. "000001", "平安银行".')
-    return format_stock
+    
+    return convert
             
-                
+global_converter = converter()         
         
 def calculable_date(date=None):
     try:
@@ -94,16 +158,19 @@ def format_seDate(from_date=None, to_date=None):
     query_from_date = calculable_to_date(-365) if from_date is None else calculable_from_date(0)
     return query_from_date + '~' + query_to_date
     
-def notice_query(input_list, searchkey=None, from_date=None, to_date=None):
+def notice_query(input_list, searchkey=None, from_date=None, to_date=None, use_converter=True):
     input_list = list(input_list)
     seDate = format_seDate(from_date, to_date)
-    formatter = stock_formatter()
+    if use_converter:
+        query_code_list = [global_converter(input) for input in input_list]
+    else:
+        query_code_list = input_list
     
-    stock_list = [formatter(input) for input in input_list]
-    df = pd.DataFrame(columns=['secName', 'secCode', 'announcementId', 'announcementTime', 'announcementTitle', 'adjunctUrl'])
+    df = pd.DataFrame(columns=['secName', 'secCode', 'announcementId', 
+                               'announcementTime', 'announcementTitle', 'adjunctUrl'])
     
-    for stock in stock_list:
-        temp_df = get_query_page(stock=stock, searchkey=searchkey, seDate=seDate)
+    for query_code in query_code_list:
+        temp_df = get_query_page(stock=query_code, searchkey=searchkey, seDate=seDate)
         df = df.append(temp_df, ignore_index=True)
     
     return df
@@ -153,5 +220,18 @@ def get_query_page(stock, searchkey, seDate):
     return result_df
             
     
+def new_query(query_name, input_list, from_date, to_date=None, searchkey=None):
+    input_list = list(input_list)
+    code_list = [global_converter(input) for input in input_list]
+    query = Query(query_name=query_name, searchkey=searchkey, 
+                  code_list=code_list, from_date=from_date, to_date=to_date)
+    print(f'Query {query_name} has been created.\nUpdating...')
+    query.update(first_update=True)
+    query.status
+    query.save()
+    return query
     
+    
+def download_pdf_notices(url_list):
+    pass    
     
