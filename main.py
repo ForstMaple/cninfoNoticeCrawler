@@ -8,6 +8,7 @@ import json
 import re
 import pickle
 import os
+from textwrap import dedent
 
 headers = {
     'Host': 'www.cninfo.com.cn',
@@ -40,14 +41,16 @@ form_data = {
     'isHLtitle': 'true'
 }
 
-working_dir = os.getcwd()
+cwd = os.getcwd()
+saved_query_path = os.path.join(cwd, '.saved_query')
 request_url = 'http://www.cninfo.com.cn/new/hisAnnouncement/query'
 max_attempts = 3
+
 
 class Query:
     def __init__(self, query_name, searchkey, code_list,
                  from_date, to_date=None,
-                 stock_list=None, last_update_time=None, record_num=None, result=None):
+                 stock_list=None, last_update_time=None, record_num=None):
         self.query_name = query_name
         self.searchkey = searchkey
         self.from_date =from_date
@@ -56,8 +59,7 @@ class Query:
         self._code_list = code_list
         self._last_update_time = last_update_time
         self._record_num = record_num
-        self._result = result
-    
+
     @property
     def status(self):
         status = f'''
@@ -73,15 +75,14 @@ class Query:
         - Use ".result" attribute to access the query result DataFrame.
         - Use ".update()" method to update the query.
         - Use ".download()" method to download the PDF notices in the query result.
-
         '''
-        print(status)
+        print(dedent(status))
     
     def save(self):
         os.makedirs('.saved_query', exist_ok=True)
-        output = os.path.join(working_dir, '.saved_query', self.query_name+'.pickle')
-        with open(output, 'wb') as f:
-            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
+        output = os.path.join(saved_query_path, self.query_name+'.json')
+        with open(output, 'w') as f:
+            json.dump(self, f, default=lambda obj: obj.__dict__, indent=4)
     
     def update(self, first_update=False):
         if self.to_date:
@@ -94,10 +95,9 @@ class Query:
                 self._stock_list = list(query_result_df['secName'].unique())
             else:
                 print(f'{new_record_num - self._record_num} new notice(s) since last update on {self._last_update_time}.')
-            self._last_update_time = datetime.now()
+            self._last_update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._record_num = new_record_num
             print(f'Your query has been updated.\nThe query result now has {new_record_num} records. You can access them by ".result" attribute.')
-            self._result = query_result_df
         
     def download(self):
         pass
@@ -159,7 +159,10 @@ def format_seDate(from_date=None, to_date=None):
     return query_from_date + '~' + query_to_date
     
 def notice_query(input_list, searchkey=None, from_date=None, to_date=None, use_converter=True):
-    input_list = list(input_list)
+    if isinstance(input_list, str):
+        input_list = [input_list]
+    else:
+        pass
     seDate = format_seDate(from_date, to_date)
     if use_converter:
         query_code_list = [global_converter(input) for input in input_list]
@@ -203,14 +206,16 @@ def get_query_page(stock, searchkey, seDate):
     result_list = first_query_result['announcements']
     total_page = record_num // 30 + 1
     
-    for pageNum in range(2, total_page + 1):
-        query_form_data['pageNum'] = pageNum
-        try:
-            query = requests.post(url=request_url, data=query_form_data, headers=headers)
-        except Exception as e:
-            print(f'Error when fetching page {pageNum}:')
-            print(e)
-        result_list.extend(query.json()['announcements'])
+    if total_page >= 2:
+        for pageNum in range(2, total_page + 1):
+            query_form_data['pageNum'] = pageNum
+            try:
+                query = requests.post(url=request_url, data=query_form_data, headers=headers)
+                result_list.extend(query.json()['announcements'])
+            except:
+                pass
+    else:
+        pass
     
     cols_to_preserve = ['secName', 'secCode', 'announcementId', 'announcementTime', 'announcementTitle', 'adjunctUrl']
     result_df = pd.DataFrame(result_list)[cols_to_preserve]
@@ -221,7 +226,10 @@ def get_query_page(stock, searchkey, seDate):
             
     
 def new_query(query_name, input_list, from_date, to_date=None, searchkey=None):
-    input_list = list(input_list)
+    if isinstance(input_list, str):
+        input_list = [input_list]
+    else:
+        pass
     code_list = [global_converter(input) for input in input_list]
     query = Query(query_name=query_name, searchkey=searchkey, 
                   code_list=code_list, from_date=from_date, to_date=to_date)
@@ -234,4 +242,3 @@ def new_query(query_name, input_list, from_date, to_date=None, searchkey=None):
     
 def download_pdf_notices(url_list):
     pass    
-    
