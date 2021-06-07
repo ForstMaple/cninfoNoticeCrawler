@@ -48,7 +48,7 @@ max_attempts = 3
 
 
 class Query:
-    def __init__(self, query_name, searchkey, code_list,
+    def __init__(self, query_name, searchkey, query_code_list,
                  from_date, to_date=None,
                  stock_list=None, last_update_time=None, record_num=None):
         self.query_name = query_name
@@ -56,18 +56,19 @@ class Query:
         self.from_date =from_date
         self.to_date = to_date
         self._stock_list = stock_list
-        self._code_list = code_list
+        self._query_code_list = query_code_list
         self._last_update_time = last_update_time
         self._record_num = record_num
 
     @property
     def status(self):
+        time_range = format_seDate(from_date=self.from_date, to_date=self.to_date)
         status = f'''
         Query name: {self.query_name}
         Search keyword: {self.searchkey}
         Stock list length: {len(self._stock_list)}
         Search keyword: {self.searchkey}
-        Time range: {str(self.from_date) + "~" + str(self.to_date)}
+        Time range: {time_range}
         Most recent update: {self._record_num} records in total on {self._last_update_time}
         
         Instructions:
@@ -78,18 +79,22 @@ class Query:
         '''
         print(dedent(status))
     
+    @property
+    def stock_code_list(self):
+        return [query_code[0:6] for query_code in self._query_code_list]
+    
     def save(self):
         os.makedirs('.saved_query', exist_ok=True)
         output = os.path.join(saved_query_path, self.query_name+'.json')
         with open(output, 'w') as f:
             json.dump(self, f, default=lambda obj: obj.__dict__, indent=4)
     
-    def update(self, first_update=False):
+    def update(self, first_update=False, save_after_update=True):
         if self.to_date:
             print(f'This query has a specific cut-off date {self.to_date}, there will be no updates.')
 
         else:
-            query_result_df = notice_query(self._code_list, self.searchkey, self.from_date, use_converter=False)
+            query_result_df = notice_query(self._query_code_list, self.searchkey, self.from_date, use_converter=False)
             new_record_num = query_result_df.shape[0]
             if first_update:
                 self._stock_list = list(query_result_df['secName'].unique())
@@ -98,6 +103,10 @@ class Query:
             self._last_update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._record_num = new_record_num
             print(f'Your query has been updated.\nThe query result now has {new_record_num} records. You can access them by ".result" attribute.')
+        if save_after_update:
+            self.save()
+        else:
+            pass
         
     def download(self):
         pass
@@ -230,10 +239,10 @@ def new_query(query_name, input_list, from_date, to_date=None, searchkey=None):
         input_list = [input_list]
     else:
         pass
-    code_list = [global_converter(input) for input in input_list]
+    query_code_list = [global_converter(input) for input in input_list]
     query = Query(query_name=query_name, searchkey=searchkey, 
-                  code_list=code_list, from_date=from_date, to_date=to_date)
-    print(f'Query {query_name} has been created.\nUpdating...')
+                  query_code_list=query_code_list, from_date=from_date, to_date=to_date)
+    print(f'Query "{query_name}" has been created.\nUpdating...')
     query.update(first_update=True)
     query.status
     query.save()
