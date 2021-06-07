@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import json
 import re
-import pickle
 import os
 from textwrap import dedent
 
@@ -50,15 +49,15 @@ max_attempts = 3
 class Query:
     def __init__(self, query_name, searchkey, query_code_list,
                  from_date, to_date=None,
-                 stock_list=None, last_update_time=None, record_num=None):
+                 stock_list=None, last_update_time=None, record_num=None, result=None):
         self.query_name = query_name
         self.searchkey = searchkey
+        self._query_code_list = query_code_list
         self.from_date =from_date
         self.to_date = to_date
-        self._stock_list = stock_list
-        self._query_code_list = query_code_list
         self._last_update_time = last_update_time
         self._record_num = record_num
+        self._result = result
 
     @property
     def status(self):
@@ -83,11 +82,25 @@ class Query:
     def stock_code_list(self):
         return [query_code[0:6] for query_code in self._query_code_list]
     
+    @property
+    def result(self):
+        return self._result
+    
     def save(self):
         os.makedirs('.saved_query', exist_ok=True)
         output = os.path.join(saved_query_path, self.query_name+'.json')
+        result_json = self._result.to_json(orient='index', force_ascii=False)
+        dict_to_save = {'query_name': self.query_name, 
+                        'searchkey': self.searchkey,
+                        'query_code_list': self._query_code_list,
+                        'from_date': self.from_date,
+                        'to_date': self.to_date,
+                        'stock_list': self._stock_list,
+                        'last_update_time': self._last_update_time, 
+                        'record_num': self._last_update_time, 
+                        'result': result_json}
         with open(output, 'w') as f:
-            json.dump(self, f, default=lambda obj: obj.__dict__, indent=4)
+            json.dump(dict_to_save, f, ensure_ascii=False, indent=4)
     
     def update(self, first_update=False, save_after_update=True):
         if self.to_date:
@@ -102,6 +115,7 @@ class Query:
                 print(f'{new_record_num - self._record_num} new notice(s) since last update on {self._last_update_time}.')
             self._last_update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._record_num = new_record_num
+            self._result = query_result_df
             print(f'Your query has been updated.\nThe query result now has {new_record_num} records. You can access them by ".result" attribute.')
         if save_after_update:
             self.save()
