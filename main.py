@@ -45,6 +45,7 @@ saved_query_path = os.path.join(cwd, '.saved_query')
 request_url = 'http://www.cninfo.com.cn/new/hisAnnouncement/query'
 max_attempts = 3
 
+# cninfo only has data after this date
 base_date = datetime.strptime('2000-01-01', "%Y-%m-%d").replace(tzinfo=timezone(timedelta(hours=8)))
 
 
@@ -268,13 +269,16 @@ def get_query_page(stock, searchkey, seDate):
                 result_list.extend(query.json()['announcements'])
             except:
                 pass
-    else:
-        pass
     
     cols_to_preserve = ['secName', 'secCode', 'announcementId', 'announcementTime', 'announcementTitle', 'adjunctUrl']
     result_df = pd.DataFrame(result_list)[cols_to_preserve]
+    # Some extra records end with ".js". No clue of their occurrence yet, but they seem to be created by cninfo.
+    result_df = result_df[~result_df['adjunctUrl'].str.endswith('.js')]
     result_df['announcementTime'] = result_df['announcementTime'].map(lambda x: date.fromtimestamp(int(str(x)[:10])))
     result_df['adjunctUrl'] = result_df['adjunctUrl'].map(lambda x: 'http://static.cninfo.com.cn/' + x)
+    if searchkey:
+        # to remove the <em> tag in the title, which highlighted the given "searchkey".
+        result_df['announcementTitle'] = result_df['announcementTitle'].map(lambda x: re.sub(r'(<|</)em>', '', x))
     print(f'Found {result_df.shape[0]} record(s) for {global_converter(stock[0:7])}.')
         
     return result_df
@@ -283,8 +287,6 @@ def get_query_page(stock, searchkey, seDate):
 def new_query(query_name, input_list, from_date, to_date=None, searchkey=None):
     if isinstance(input_list, str):
         input_list = [input_list]
-    else:
-        pass
     
     query_code_list = [global_converter(input) for input in input_list]
     
@@ -294,8 +296,6 @@ def new_query(query_name, input_list, from_date, to_date=None, searchkey=None):
     if to_date:
         calculable_to_date = calculable_date(to_date)
         to_date = calculable_to_date(0).strftime('%Y-%m-%d')
-    else:
-        pass
     
     # When a code corresponds with no records, it will not appear in the .result
     temp_list = [query_code[0:7] for query_code in query_code_list]
