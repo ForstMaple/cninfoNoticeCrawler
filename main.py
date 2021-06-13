@@ -8,6 +8,7 @@ import json
 import re
 import os
 from textwrap import dedent
+from tqdm import tqdm
 
 headers = {
     'Host': 'www.cninfo.com.cn',
@@ -42,6 +43,7 @@ form_data = {
 
 cwd = os.getcwd()
 saved_query_path = os.path.join(cwd, '.saved_query')
+downloaded_notice_path = os.path.join(cwd, 'Downloads')
 request_url = 'http://www.cninfo.com.cn/new/hisAnnouncement/query'
 max_attempts = 3
 
@@ -67,18 +69,17 @@ class Query:
     def status(self):
         time_range = format_seDate(from_date=self.from_date, to_date=self.to_date)
         status = f'''
-        Query name: {self.query_name}
-        Search keyword: {self.searchkey}
-        Stock list length: {len(self._query_code_list)}
-        Search keyword: {self.searchkey}
-        Time range: {time_range}
-        Most recent update: {self._record_num} records in total on {self._last_update_time}
+        查询名称: {self.query_name}
+        搜索关键词: {self.searchkey}
+        涉及公司数量: {len(self._query_code_list)}
+        时间范围: {time_range}
+        最近一次更新: {self._last_update_time} 共 {self._record_num} 条记录
         
-        Instructions:
-        - Use ".stock_list" attribute to access the stocks involved in the query.
-        - Use ".result" attribute to access the query result DataFrame.
-        - Use ".update()" method to update the query.
-        - Use ".download()" method to download the PDF notices in the query result.
+        帮助:
+        - 使用 ".stock_list" 属性可以获得该查询所涉及的公司列表；
+        - 使用 ".result" 属性可以获得DataFrame格式的查询结果；
+        - 使用 ".update()" 方法可以对该查询进行更新；
+        - 使用 ".download()" 方法可以下载该查询结果中的公告的PDF文件。
         '''
         print(dedent(status))
     
@@ -101,28 +102,28 @@ class Query:
         dict_to_save = {'query_name': self.query_name, 
                         'searchkey': self.searchkey,
                         'query_code_list': self._query_code_list,
+                        'stock_list': self._stock_list,
                         'from_date': self.from_date,
                         'to_date': self.to_date,
-                        'stock_list': self._stock_list,
                         'last_update_time': self._last_update_time, 
-                        'record_num': self._last_update_time}
+                        'record_num': self._record_num}
         dict_to_save['result'] = json.loads(result_json)
         with open(output, 'w') as f:
             json.dump(dict_to_save, f, ensure_ascii=False, indent=4)
     
     def update(self, first_update=False, save_after_update=True):
         if self.to_date:
-            print(f'This query has a specific cut-off date {self.to_date}, there will be no updates.')
+            print(f'该查询有明确截至日期 {self.to_date}，更新将不会进行。')
 
         else:
             query_result_df = notice_query(self._query_code_list, self.searchkey, self.from_date, use_converter=False)
             new_record_num = query_result_df.shape[0]
             if not first_update:
-                print(f'{new_record_num - self._record_num} new notice(s) since last update on {self._last_update_time}.')
+                print(f'自 {self._last_update_time} 上一次更新后，有 {new_record_num - self._record_num} 条新记录。')
             self._last_update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._record_num = new_record_num
             self._result = query_result_df
-            print(f'Your query has been updated.\nThe query result now has {new_record_num} records. You can access them by ".result" attribute.')
+            print(f'更新完成！\n该查询目前有 {new_record_num} 条记录，你可以通过 ".result" 属性来获得它们。')
         if save_after_update:
             self.save()
         else:
@@ -131,9 +132,8 @@ class Query:
     def edit(target_list=None, from_date=None, to_date=None):
         pass
         
-    def download(self):
-        pass
-        
+    def download(self, overwrite=False):
+        download_pdf_notices(result_df=self._result, folder=self.query_name, overwrite=overwrite)
         
 def converter():
     '''
@@ -163,7 +163,7 @@ def converter():
                 orgId = rf_list.set_index('zwjc').at[input, 'orgId']
                 return code + ',' + orgId   
         except Exception:
-            raise ValueError('Please check your input.\nStock codes and stock names are supported, e.g. "000001", "平安银行".')
+            raise ValueError('请检查你的输入。\n股票代码和中文简称均支持，例如 "000001", "平安银行"。')
     
     return convert
             
@@ -193,10 +193,10 @@ def format_seDate(from_date=None, to_date=None):
     calculable_from_date = calculable_date(from_date)
     
     if calculable_from_date(0) < base_date:
-        raise ValueError('cninfo has no record before 2000-01-01, please provide a later date.')
+        raise ValueError('巨潮信息没有2000年1月1日以前的数据，请重新输入。')
     
     if calculable_from_date(0) > calculable_to_date(0):
-        raise ValueError('"from_date" should be no later than "to_date".')
+        raise ValueError('"from_date" 参数必须不晚于 "to_date" 参数，请重新输入。')
     
     # The to_date will be "tommorow" if not specified so as to get the latest notices,
     # since a notice is usually released on the night just before the stated date.
@@ -243,7 +243,7 @@ def get_query_page(stock, searchkey, seDate):
         attempt += 1
         sleep(random.uniform(1, 2))
         if attempt > max_attempts:
-            print(f'Failed to fetch any data in {max_attempts} attempt(s), please check your parameters.')
+            print(f'在一共 {max_attempts} 次尝试中未能获得任何数据，请检查你的参数。')
             break
         else:
             try:
@@ -256,7 +256,7 @@ def get_query_page(stock, searchkey, seDate):
     first_query_result = first_query.json()
     record_num = first_query_result['totalAnnouncement']
     if record_num == 0:
-        print(f'[Warning] Found 0 record for {global_converter(stock[0:7])}.')
+        print(f'[Warning] 在给定条件下没有找到 {global_converter(stock[0:7])} 的任何记录。')
         return None
     result_list = first_query_result['announcements']
     total_page = record_num // 30 + 1
@@ -274,12 +274,12 @@ def get_query_page(stock, searchkey, seDate):
     result_df = pd.DataFrame(result_list)[cols_to_preserve]
     # Some extra records end with ".js". No clue of their occurrence yet, but they seem to be created by cninfo.
     result_df = result_df[~result_df['adjunctUrl'].str.endswith('.js')]
-    result_df['announcementTime'] = result_df['announcementTime'].map(lambda x: date.fromtimestamp(int(str(x)[:10])))
+    result_df['announcementTime'] = result_df['announcementTime'].map(lambda x: datetime.fromtimestamp(x / 1000).strftime('%Y-%m-%d'))
     result_df['adjunctUrl'] = result_df['adjunctUrl'].map(lambda x: 'http://static.cninfo.com.cn/' + x)
     if searchkey:
         # to remove the <em> tag in the title, which highlighted the given "searchkey".
         result_df['announcementTitle'] = result_df['announcementTitle'].map(lambda x: re.sub(r'(<|</)em>', '', x))
-    print(f'Found {result_df.shape[0]} record(s) for {global_converter(stock[0:7])}.')
+    print(f'找到 {global_converter(stock[0:7])} 的 {result_df.shape[0]} 条记录。')
         
     return result_df
             
@@ -303,12 +303,97 @@ def new_query(query_name, input_list, from_date, to_date=None, searchkey=None):
     
     query = Query(query_name=query_name, searchkey=searchkey, 
                   query_code_list=query_code_list, from_date=from_date, to_date=to_date, stock_list=stock_list)
-    print(f'Query "{query_name}" has been created.\nUpdating...')
+    print(f'查询 "{query_name}" 已创建.\n正在更新...')
     query.update(first_update=True)
     query.status
     query.save()
     return query
     
     
-def download_pdf_notices(url_list):
-    pass    
+def download_pdf_notices(result_df, folder=None, overwrite=False):
+    try:
+        dl_path = os.path.join(downloaded_notice_path, folder)
+    except:
+        dl_path = downloaded_notice_path
+        
+    os.makedirs(dl_path, exist_ok=True)
+    info_df = result_df.copy()
+    file_names = info_df['secName'] + '_' \
+                 + info_df['announcementTime'].map(lambda x: x.replace('-', '')) + '_' \
+                 + info_df['announcementId'] + '_' \
+                 + info_df['announcementTitle'] + '.PDF'
+    download_urls = info_df['adjunctUrl']
+    total_records = info_df.shape[0]
+
+    print(f'将尝试下载 {total_records} 个公告文件。 ')
+    option = input('如需取消请输入n，留空或输入其他值将继续下载。  ')
+    if option.lower() == 'n':
+        print('用户取消下载！')
+        return
+    else:
+        print('开始下载...')
+        
+    failure_num = 0
+        
+    sleep(1)
+        
+    for i in range(0, total_records):
+        url = download_urls[i]
+        name = file_names[i]
+        file_path = os.path.join(dl_path, name)
+        if os.path.exists(file_path) and (not overwrite):
+            print(f'公告 {name} 已存在，将跳过下载。')
+            continue
+        else:
+            try:
+                response = requests.get(url=url, stream=True)
+                with tqdm.wrapattr(open(file_path, "wb"), 
+                                    "write", miniters=1, desc=name, 
+                                    total=int(response.headers.get('content-length', 0))) as f:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        f.write(chunk)
+            except Exception as e:
+                print(f'下载第 {i + 1} 个公告 {name} 时出错！')
+                print(e)
+                failure_num += 1
+                continue
+                        
+    print(f'下载完成！下载成功 {total_records - failure_num} 个， 下载失败 {failure_num} 个。')
+
+def display_saved_queries():
+    try:
+        saved_query_df = pd.DataFrame(columns=['文件名', '文件大小', '修改时间'])
+        saved_query_df['文件名'] = os.listdir(saved_query_path)
+        saved_query_df = saved_query_df[saved_query_df['文件名'].str.endswith('.json')]
+        saved_query_df['文件大小'] = saved_query_df['文件名'].map(lambda x: str(round(float(os.path.getsize(os.path.join(saved_query_path, x))) / 1024, 2)) + ' KB')
+        saved_query_df['修改时间'] = saved_query_df['文件名'].map(lambda x: datetime.fromtimestamp(os.path.getmtime(os.path.join(saved_query_path, x))).strftime('%Y/%m/%d %H:%M:%S'))
+        return saved_query_df
+    except:
+        print('当前没有已保存的查询或文件格式有误！')
+        return None
+
+def load_query(file_name):
+    if not file_name.endswith('.json'):
+        file_name = file_name + '.json'
+        
+    file_path = os.path.join(saved_query_path, file_name)
+    if not os.path.exists(file_path):
+        raise ValueError('没有找到对应的文件！')
+        
+    try:
+        with open(file_path, 'rb') as f:
+            args = json.load(f)
+        query = Query(query_name=args['query_name'], 
+                      searchkey=args['searchkey'], 
+                      query_code_list=args['query_code_list'],
+                      stock_list=args['stock_list'],
+                      from_date=args['from_date'],
+                      to_date=args['to_date'],
+                      last_update_time=args['last_update_time'],
+                      record_num=args['record_num'],
+                      result=pd.DataFrame(args['result']).T)
+        return query
+    except Exception as e:
+        print('文件格式有误或文件已损坏！')
+        print(e)
+        return None
