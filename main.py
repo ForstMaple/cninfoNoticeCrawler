@@ -145,7 +145,9 @@ def converter():
         returns the stock_code orgId pair for cninfo query.
     '''
     with open('szse_stock.json', 'rb') as szse_stock:
-        rf_list = pd.DataFrame(json.load(szse_stock))
+        
+        rf_file = json.load(szse_stock)
+        rf_list = pd.DataFrame(rf_file['stockList'])
     
     def convert(input):
         possible_stock_code = re.compile(r'\d{6}')
